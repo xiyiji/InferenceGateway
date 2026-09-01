@@ -4,7 +4,6 @@
 
 Build and measure a production-shaped LLM inference service on one GPU. The deliverable is not the server — it is the **evidence**: a reproducible benchmark showing how continuous batching, quantization, and queue policy change throughput and tail latency, plus live GPU observability.
 
-Interview framing: *"Measure first, then tune. Every claim in the README maps to a JSON file in `results/`."*
 
 ## 2. Non-goals
 
@@ -62,15 +61,3 @@ Interview framing: *"Measure first, then tune. Every claim in the README maps to
 - Tests run without a GPU (engine mocked)
 - Dashboard JSON imports cleanly into a fresh Grafana
 - README states hardware, model, commit hash, and vLLM version for each result
-
-## 8. Resume bullet template (fill from results)
-
-> Built an OpenAI-compatible LLM inference gateway (Ray Serve + vLLM) serving a 7B model on a single A100; continuous batching and FP8 quantization raised throughput **__×** over an HF baseline while holding p95 latency under **__ ms** at **__** concurrent requests. Instrumented with Prometheus/DCGM/Grafana; added queue timeouts and backpressure that cut burst-period p99 by **__%**.
-
-## 9. Interview talking points to prepare
-
-- Why continuous batching beats static batching (decode steps have variable length)
-- What paged KV cache solves (fragmentation) and its cost (block table lookups)
-- Where TTFT comes from vs where TPOT comes from; which knob moves which
-- Why unbounded queues are worse than 429s under overload
-- FP8 vs int4: when quality drops, how you measured it
