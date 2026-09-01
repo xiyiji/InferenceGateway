@@ -1,0 +1,13 @@
+vllm>=0.6
+ray[serve]>=2.30
+fastapi
+uvicorn
+httpx
+transformers
+torch
+numpy
+pandas
+matplotlib
+prometheus-client
+pytest
+pytest-asyncio
