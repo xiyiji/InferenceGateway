@@ -26,19 +26,33 @@ async def one(client: httpx.AsyncClient, url: str, max_tokens: int, stream: bool
     ttft, tokens, status = None, 0, 200
     try:
         if stream:
+            done, usage = False, None
             async with client.stream("POST", f"{url}/v1/chat/completions", json=body) as r:
                 status = r.status_code
+                r.raise_for_status()
                 async for line in r.aiter_lines():
-                    if line.startswith("data:") and "[DONE]" not in line:
-                        if ttft is None:
+                    if line.startswith("data:"):
+                        payload = line[5:].strip()
+                        if payload == "[DONE]":
+                            done = True
+                            continue
+                        item = json.loads(payload)
+                        if item.get("error"):
+                            raise ValueError(item["error"])
+                        content = any(c.get("delta", {}).get("content") for c in item.get("choices", []))
+                        if content and ttft is None:
                             ttft = time.perf_counter() - t0
-                        tokens += 1
+                        if item.get("usage") is not None:
+                            usage = item["usage"]
+            if not done or usage is None or ttft is None:
+                raise ValueError("Incomplete stream or missing exact usage")
+            tokens = usage["completion_tokens"]
         else:
             r = await client.post(f"{url}/v1/chat/completions", json=body)
             status = r.status_code
             j = r.json()
-            tokens = j.get("usage", {}).get("completion_tokens") or len(
-                j["choices"][0]["message"]["content"].split())
+            r.raise_for_status()
+            tokens = j["usage"]["completion_tokens"]
     except Exception:
         status = 599
     return {"ttft_s": ttft, "e2e_s": time.perf_counter() - t0, "tokens": tokens, "status": status}
