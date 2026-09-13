@@ -4,6 +4,7 @@ Run:  serve run serve.app:deployment --model Qwen/Qwen2.5-7B-Instruct
 """
 from __future__ import annotations
 
+import inspect
 import json
 import time
 import uuid
@@ -59,7 +60,12 @@ class Gateway:
 
     async def _prompt(self, messages: list[ChatMessage]) -> str:
         if self.tokenizer is None:
-            self.tokenizer = await self.engine.get_tokenizer()
+            tokenizer = self.engine.get_tokenizer()
+            # vLLM <= 0.28 returned an awaitable here, while vLLM 0.29+
+            # returns the tokenizer directly. Support both runtime contracts.
+            if inspect.isawaitable(tokenizer):
+                tokenizer = await tokenizer
+            self.tokenizer = tokenizer
         return self.tokenizer.apply_chat_template(
             [m.model_dump() for m in messages], tokenize=False, add_generation_prompt=True
         )
