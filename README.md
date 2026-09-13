@@ -80,7 +80,7 @@ schedules active sequences and GPU KV blocks while tokens are generated.
 | OpenAI-compatible chat completions + SSE | Implemented | Ray Serve ingress |
 | vLLM continuous batching + PagedAttention | Implemented | Engine runtime |
 | Prefix KV-cache support | Implemented | `enable_prefix_caching=True` in vLLM |
-| Ray Serve autoscaling and backpressure | Implemented | 1–2 replicas, bounded ongoing requests |
+| Ray Serve deployment and backpressure | Implemented | One replica on the single-GPU demo; bounded ongoing requests |
 | HF Transformers baseline | Implemented | Separate single-request service |
 | TTFT, E2E, throughput, goodput harness | Implemented | Fixed-seed async benchmark client |
 | Prometheus + DCGM scrape configuration | Configured | Requires a running NVIDIA GPU environment |
@@ -101,8 +101,14 @@ reply = client.chat.completions.create(
 
 The default deployment serves `Qwen/Qwen2.5-7B-Instruct` in BF16, allows up
 to 128 active sequences, reserves 90% of GPU memory for the engine, and enables
-vLLM prefix caching. These values are deployment arguments rather than fixed
-hardware claims.
+vLLM prefix caching. `VLLM_MAX_NUM_SEQS`, `VLLM_MAX_NUM_BATCHED_TOKENS`
+(default4096), and `VLLM_MAX_MODEL_LEN` (default4096) are configurable environment variables.
+These values are deployment settings rather than hardware claims.
+
+The API now returns exact `prompt_tokens`, `completion_tokens`, and `total_tokens`
+from vLLM token IDs, including a final streaming usage event. SSE chunk counts are
+not used as token counts. The dedicated [SLO-aware scheduler study](https://github.com/xiyiji/slo-aware-vllm)
+contains the controlled open-loop experiment, raw measurements and design document.
 
 ## Metrics
 
@@ -122,7 +128,7 @@ increasing concurrency:
 make test
 
 # GPU environment
-serve run serve.app:deployment --model Qwen/Qwen2.5-7B-Instruct
+serve run --address auto serve.app:deployment
 python serve/baseline_hf.py --model Qwen/Qwen2.5-7B-Instruct
 make bench
 ```
@@ -141,7 +147,9 @@ corresponding artifacts.
 
 ```bash
 pip install -r requirements.txt
-serve run serve.app:deployment --model Qwen/Qwen2.5-7B-Instruct
+ray start --head
+serve start --address auto --http-host 0.0.0.0 --http-port 8000
+serve run --address auto serve.app:deployment
 
 # optional monitoring
 docker compose -f monitoring/docker-compose.yml up
