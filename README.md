@@ -1,57 +1,157 @@
+<div align="center">
+
 # InferenceGateway
 
-A production-shaped LLM inference engine on one GPU: Ray Serve ingress in
-front of vLLM's `AsyncLLMEngine`, an HF Transformers baseline to measure it
-against, and a benchmark harness that turns serving folklore — continuous
-batching, quantization, queue policy — into reproducible numbers.
+### A production-shaped GPU data plane for low-latency LLM inference
 
-This repo is the **engine layer** of a two-repo stack:
-[llm-serving-platform](https://github.com/xiyiji/llm-serving-platform) is
-the **gateway layer** above it — cross-engine routing, request
-micro-batching, prefix caching, canary releases and an ops console. Point
-that platform's backend config at this server and the two form one serving
-path: gateway → engine → GPU.
+Ray Serve ingress in front of vLLM's `AsyncLLMEngine`, with continuous
+batching, prefix caching, backpressure, reproducible load tests, and live GPU
+telemetry.
+
+[![CI](https://github.com/xiyiji/InferenceGateway/actions/workflows/ci.yml/badge.svg)](https://github.com/xiyiji/InferenceGateway/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white)
+![Ray Serve](https://img.shields.io/badge/Ray-Serve-028CF0?logo=ray&logoColor=white)
+![vLLM](https://img.shields.io/badge/vLLM-AsyncLLMEngine-5C4EE5)
+![CUDA](https://img.shields.io/badge/NVIDIA-CUDA-76B900?logo=nvidia&logoColor=white)
+![Prometheus](https://img.shields.io/badge/Prometheus-GPU%20Metrics-E6522C?logo=prometheus&logoColor=white)
+
+`continuous batching` · `PagedAttention` · `prefix caching` · `SSE streaming`
+· `TTFT / TPOT / goodput` · `DCGM telemetry`
+
+</div>
+
+This repository is the GPU engine layer of a two-repository serving stack.
+[llm-serving-platform](https://github.com/xiyiji/llm-serving-platform) is the
+companion gateway and operations layer for cross-engine routing, request
+micro-batching, response caching, release controls, and the web console.
 
 ## Architecture
 
-| Component | Tech | Role |
+```mermaid
+flowchart LR
+    CLIENT[OpenAI SDK / benchmark client]
+
+    subgraph CONTROL[llm-serving-platform · optional control plane]
+        ROUTER[Adaptive router]
+        MBATCH[Gateway micro-batcher]
+        RCACHE[Prefix response cache]
+        ROUTER --> MBATCH --> RCACHE
+    end
+
+    subgraph ENGINE[InferenceGateway · GPU data plane]
+        API[Ray Serve + FastAPI ingress]
+        LIMIT[Queue policy + backpressure]
+        VLLM[vLLM AsyncLLMEngine]
+        SCHED[Continuous batching + PagedAttention]
+        GPU[CUDA GPU]
+        API --> LIMIT --> VLLM --> SCHED --> GPU
+    end
+
+    CLIENT --> ROUTER
+    CLIENT -. direct benchmark .-> API
+    RCACHE -->|OpenAI-compatible HTTP + SSE| API
+    GPU -. vLLM metrics .-> PROM[Prometheus]
+    GPU -. DCGM exporter .-> PROM
+    PROM --> GRAFANA[Grafana]
+```
+
+The two batching layers are intentionally separate. The companion gateway
+groups near-simultaneous HTTP requests before dispatch; vLLM continuously
+schedules active sequences and GPU KV blocks while tokens are generated.
+
+## Technology stack
+
+| Layer | Technology | Responsibility |
 |---|---|---|
-| Ingress | Ray Serve + FastAPI | OpenAI-compatible `/v1/chat/completions`, streaming |
-| Engine | vLLM `AsyncLLMEngine` | continuous batching, `enable_prefix_caching=True` |
-| Queue policy | `max_ongoing_requests` + timeouts | backpressure and 429s instead of an unbounded queue |
-| Baseline | HF `generate()` behind FastAPI | one request at a time — the "why batching matters" control |
-| Metrics | vLLM `/metrics` + DCGM → Prometheus → Grafana | GPU utilisation, KV-cache occupancy, latency |
-| Load gen | `bench/run_bench.py` (asyncio + httpx) | fixed-seed prompt mix, concurrency sweeps |
+| Serving ingress | Ray Serve, FastAPI, Pydantic | OpenAI-compatible `/v1/chat/completions`, SSE streaming |
+| Inference engine | vLLM `AsyncLLMEngine`, PyTorch, CUDA | Asynchronous generation and GPU execution |
+| Latency path | Continuous batching, PagedAttention, prefix caching | Higher GPU occupancy and KV-block reuse |
+| Flow control | Ray `max_ongoing_requests`, request timeouts | Bounded queues and overload behavior |
+| Baseline | Hugging Face Transformers `generate()` | Single-request control for batching comparisons |
+| GPU telemetry | NVIDIA DCGM Exporter, vLLM metrics | GPU utilization, queue state, and KV-cache occupancy |
+| Observability | Prometheus, Grafana | Metrics collection and serving dashboards |
+| Benchmarking | asyncio, httpx, NumPy, pandas, Matplotlib | Concurrency sweeps, TTFT, E2E latency, throughput, goodput |
+| Verification | pytest, GitHub Actions | CPU-only API-contract and statistics tests |
 
-## Metrics the harness reports
+## Capability matrix
 
-- **TTFT** — time to first token: prefill cost plus queue wait
-- **TPOT** — time per output token: decode steady state
-- **E2E latency** — p50 / p95 / p99, request start to last token
-- **Throughput** — output tokens/s across all concurrent requests
-- **Goodput** — requests/s meeting the SLO (p95 E2E < 1 s at 256-token outputs)
-- **GPU util / KV-cache %** — sampled at 1 s from DCGM and vLLM gauges
+| Capability | Status | Scope |
+|---|---|---|
+| OpenAI-compatible chat completions + SSE | Implemented | Ray Serve ingress |
+| vLLM continuous batching + PagedAttention | Implemented | Engine runtime |
+| Prefix KV-cache support | Implemented | `enable_prefix_caching=True` in vLLM |
+| Ray Serve autoscaling and backpressure | Implemented | 1–2 replicas, bounded ongoing requests |
+| HF Transformers baseline | Implemented | Separate single-request service |
+| TTFT, E2E, throughput, goodput harness | Implemented | Fixed-seed async benchmark client |
+| Prometheus + DCGM scrape configuration | Configured | Requires a running NVIDIA GPU environment |
+| Published GPU result tables and curves | Pending fresh run | Generated under `results/`, not claimed from source alone |
+| Adaptive routing and gateway micro-batching | Companion integration | Implemented in `xiyiji/llm-serving-platform` |
 
-## Experiment matrix
+## Serving API
 
-1. HF baseline vs vLLM at concurrency 1 / 4 / 16 — the batching multiplier
-2. `max_num_seqs` sweep — find the knee of the throughput-vs-p95 curve
-3. `gpu_memory_utilization` sweep — KV-cache blocks vs preemption
-4. BF16 vs FP8 vs AWQ-int4 — speed with a quality check attached
-5. Burst load (0→300→0 concurrency in 60 s) — queue depth, 429 rate, p95
+```python
+from openai import OpenAI
 
-Every table reproduces with `make bench`; each result records hardware,
-model, commit hash and vLLM version. Tests run without a GPU (engine
-mocked): `make test`.
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="unused")
+reply = client.chat.completions.create(
+    model="Qwen/Qwen2.5-7B-Instruct",
+    messages=[{"role": "user", "content": "Explain continuous batching."}],
+)
+```
 
-## Run
+The default deployment serves `Qwen/Qwen2.5-7B-Instruct` in BF16, allows up
+to 128 active sequences, reserves 90% of GPU memory for the engine, and enables
+vLLM prefix caching. These values are deployment arguments rather than fixed
+hardware claims.
+
+## Metrics
+
+- **TTFT**: time to first token, including prefill and queue wait
+- **E2E latency**: p50, p95, and p99 from request start to final token
+- **Throughput**: output tokens per second across concurrent requests
+- **Goodput**: requests per second meeting the configured latency objective
+- **GPU utilization**: sampled from NVIDIA DCGM metrics
+- **KV-cache occupancy**: sampled from vLLM cache gauges
+
+## Benchmark workflow
+
+The checked-in harness compares the Hugging Face baseline with vLLM at
+increasing concurrency:
+
+```bash
+make test
+
+# GPU environment
+serve run serve.app:deployment --model Qwen/Qwen2.5-7B-Instruct
+python serve/baseline_hf.py --model Qwen/Qwen2.5-7B-Instruct
+make bench
+```
+
+`make bench` writes machine-readable results under `results/` and generates a
+throughput-versus-p95 curve. A credible result should record the GPU, model,
+commit SHA, vLLM version, concurrency, and generation length. Source code and
+CPU tests alone are not presented as GPU benchmark evidence.
+
+The broader experiment plan in [SPEC.md](SPEC.md) covers concurrency,
+`max_num_seqs`, GPU-memory utilization, BF16/FP8/AWQ, quality checks, and burst
+load. Those comparisons remain experiments until a fresh GPU run produces the
+corresponding artifacts.
+
+## Run the stack
 
 ```bash
 pip install -r requirements.txt
-python serve/app.py                      # vLLM gateway on :8000
-python serve/baseline_hf.py              # HF baseline on :8001
-make bench                               # sweep both, write results/
-docker compose -f monitoring/docker-compose.yml up   # Prometheus + Grafana
+serve run serve.app:deployment --model Qwen/Qwen2.5-7B-Instruct
+
+# optional monitoring
+docker compose -f monitoring/docker-compose.yml up
 ```
 
-See [SPEC.md](SPEC.md) for goals, non-goals and acceptance criteria.
+Point `llm-serving-platform` at this engine:
+
+```bash
+LSP_UPSTREAM_BASE_URL=http://<inference-gateway-host>:8000/v1
+LSP_UPSTREAM_MODELS=Qwen/Qwen2.5-7B-Instruct
+```
+
+See [SPEC.md](SPEC.md) for the acceptance criteria and experiment design.
