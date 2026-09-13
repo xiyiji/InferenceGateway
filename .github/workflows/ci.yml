@@ -17,6 +17,6 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install CPU test dependencies
-        run: pip install pytest fastapi pydantic numpy
+        run: pip install pytest fastapi pydantic numpy httpx
       - name: Run API contract and statistics tests
         run: pytest -q tests/
