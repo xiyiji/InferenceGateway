@@ -107,7 +107,7 @@ These values are deployment settings rather than hardware claims.
 
 The API now returns exact `prompt_tokens`, `completion_tokens`, and `total_tokens`
 from vLLM token IDs, including a final streaming usage event. SSE chunk counts are
-not used as token counts. The dedicated [SLO-aware scheduler study](https://github.com/xiyiji/slo-aware-vllm)
+not used as token counts. The dedicated [Tempo scheduler study](https://github.com/xiyiji/tempo)
 contains the controlled open-loop experiment, raw measurements and design document.
 
 ## Metrics
